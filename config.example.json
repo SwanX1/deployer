@@ -1,0 +1,19 @@
+{
+    "repositories": [
+        {
+            "name": "example-service",
+            "url": "https://github.com/SwanX1/example-repo.git",
+            "branch": "main",
+            "directory": "deploy/example-service"
+        }
+    ],
+    "notifications": [
+        {
+            "type": "discord",
+            "url": "https://discord.com/api/webhooks/..."
+        }
+    ],
+    "host": "0.0.0.0",
+    "port": 3000,
+    "secret_key": "your-secret-key-here (should be a long random string)"
+}
