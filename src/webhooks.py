@@ -1,3 +1,5 @@
+import json
+from pydantic import BaseModel
 import hmac
 from typing import Literal
 from urllib.parse import parse_qs
@@ -64,3 +66,23 @@ def get_signature(type: WebhookType, headers) -> str | None:
 def validate_webhook(payload: str, secret: str, signature: str) -> bool:
     hash = hmac.new(secret.encode(), msg=payload.encode(), digestmod='sha256')
     return hmac.compare_digest(hash.hexdigest(), signature)
+
+class PushInfo(BaseModel):
+    repository: str
+    possible_urls: list[str]
+    ref: str
+    commit: str
+
+def extract_push_info(type: WebhookType, payload: str) -> PushInfo | None:
+    if type == 'github':
+        try:
+            data = json.loads(payload)
+            repository = data['repository']['name']
+            possible_urls = [data['repository']['clone_url'], data['repository']['ssh_url'], data['repository']['git_url'], data['repository']['svn_url']]
+            ref = data['ref']
+            commit = data['after']
+        except Exception as _:
+            return None
+        return PushInfo(repository=repository, possible_urls=possible_urls, ref=ref, commit=commit)
+    else:
+        return None # TODO: implement for forgejo and gitea as well (are they different from github?)

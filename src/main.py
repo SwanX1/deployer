@@ -1,3 +1,4 @@
+from deploy import enqueue_recheck
 import subprocess
 import shutil
 import argparse
@@ -36,6 +37,8 @@ UVICORN_LOG_CONFIG  = {
 REQUIRED_TOOLS = ['git', 'docker']
 
 def main():
+    # TODO: these checks should be actually done every time we run a deployment, not just at startup.
+    # TODO: what if we uninstall docker or git while the service is running?
     failed_checks = False
     if shutil.which('git') is None:
         logging.error("Error: Git is not installed or not in PATH.")
@@ -71,6 +74,11 @@ def main():
     config.set_config_path(config_path)
     logger.info(f"Loading configuration from '{config_path}'...")
     config.load_config()
+
+    # Enqueue recheck for all services at startup to ensure they are up to date
+    for service in config.get_config().repositories:
+        logger.info(f"Enqueuing initial deployment for service '{service.name}'...")
+        enqueue_recheck(service)
 
     # Start service
     from server import app

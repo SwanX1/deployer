@@ -4,11 +4,18 @@ from typing import overload, Literal
 import subprocess
 
 logger = logging.getLogger(__name__)
+logging.addLevelName(11, "DOCKER")
+logging.addLevelName(12, "GIT")
 
 @overload
 def run_git(args, pwd=None, capture_output: Literal[True] = True) -> tuple[int, str]: ...
 @overload
 def run_git(args, pwd=None, capture_output: Literal[False] = False) -> int: ...
+
+def _print_subprocess_output(level: int, text: str):
+    if text:
+        for line in text.strip().splitlines():
+            logger.log(level, line)
 
 def run_git(args, pwd=None, capture_output=False) -> int | tuple[int, str]:
     command = ['git'] + args
@@ -19,11 +26,12 @@ def run_git(args, pwd=None, capture_output=False) -> int | tuple[int, str]:
     # Pipe stdout and stderr to the logger
     process = subprocess.Popen(command, cwd=pwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     stdout, stderr = process.communicate()
-    if stdout:
-        logger.info(stdout.strip())
-    if stderr:
-        logger.error(stderr.strip())
-    return process.returncode
+    exit_code = process.returncode
+    _print_subprocess_output(12, stdout)
+    _print_subprocess_output(logging.ERROR if exit_code != 0 else 12, stderr)
+    if exit_code != 0:
+        logger.error(f"Command failed: {' '.join(command)}")
+    return exit_code
 
 
 def run_docker_compose(args, pwd=None) -> int:
@@ -37,20 +45,22 @@ def run_docker_compose(args, pwd=None) -> int:
         process.kill()
         stdout, stderr = process.communicate()
         logger.error(f"Command timed out: {' '.join(command)}")
-        if stdout:
-            logger.info(stdout.strip())
-        if stderr:
-            logger.error(stderr.strip())
+        _print_subprocess_output(11, stdout)
+        _print_subprocess_output(logging.ERROR, stderr)
         return -1
 
-    if stdout:
-        logger.info(stdout.strip())
-    if stderr:
-        logger.error(stderr.strip())
-    return process.returncode
+    exit_code = process.returncode
+    _print_subprocess_output(11, stdout)
+    _print_subprocess_output(logging.ERROR if exit_code != 0 else 11, stderr)
+    if exit_code != 0:
+        logger.error(f"Command failed: {' '.join(command)}")
+    return exit_code
 
 def clone_repository(repo_url, target_dir) -> bool:
     logger.info(f"Cloning repository from {repo_url} to {target_dir}...")
+    # Ensure parent directory exists
+    parent_dir = os.path.dirname(target_dir)
+    os.makedirs(parent_dir, exist_ok=True)
     # git clone
     return run_git(['clone', '--verbose', '--depth', '1', '--recurse-submodules', '--shallow-submodules', repo_url, target_dir], capture_output=False) == 0
 

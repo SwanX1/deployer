@@ -49,6 +49,16 @@ class Config(BaseModel):
             logger.warning("No secret_key specified in configuration. Webhook security will be disabled.")
         return v
 
+    @field_validator('repositories', mode='after')
+    def validate_repositories(cls, v: list[RepositoryConfig]) -> list[RepositoryConfig]:
+        # Check for duplicate repository names
+        names = set()
+        for repo in v:
+            if repo.name in names:
+                raise ValueError(f"Duplicate repository name: {repo.name}")
+            names.add(repo.name)
+        return v
+
 
 CONFIG: Config | None = None
 CONFIG_PATH: str | None = None

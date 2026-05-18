@@ -56,16 +56,44 @@ async def webhook():
         if not webhooks.validate_webhook(body, secret, signature):
             return Response("Unauthorized: Invalid signature", 401, mimetype='text/plain')
 
-    
+    webhook_event = webhooks.get_webhook_event(request.headers)
+    if webhook_event is None:
+        return Response("Bad Request: Missing webhook event header", 400, mimetype='text/plain')
 
-    try:
-        body = json.loads(body)
-    except json.JSONDecodeError:
-        return Response("Bad Request: Invalid JSON in request body", 400, mimetype='text/plain')
-
-    print(f"Received webhook ({determined_type}): {json.dumps(body, indent=2)}")
+    print(f"Received webhook ({determined_type}): {json.dumps(json.loads(body), indent=2)}")
     print(f"Headers: {json.dumps(dict(request.headers), indent=2)}")
 
-    # TODO: Actually handle webhook
+    Thread(target=webhook_subprocess, args=(webhook_event, determined_type, body)).start() # TODO: replace with task queue
 
     return Response("Accepted", 202, mimetype='text/plain')
+
+def webhook_subprocess(event: str, determined_type: webhooks.WebhookType, payload: str):
+    # Check if it's a push event and extract info
+    if event == 'push':
+        push_info = webhooks.extract_push_info(determined_type, payload)
+        if push_info is None:
+            return Response("Bad Request: Invalid JSON in request body", 400, mimetype='text/plain')
+
+
+        # Find the service(s) that match the possible URLs
+        config_data = config.get_config()
+        matching_services = []
+        for repo in config_data.repositories:
+            # Check URL
+            if repo.url not in push_info.possible_urls:
+                continue
+                
+            # Check branch
+            expected_ref = f"refs/heads/{repo.branch}"
+            if push_info.ref != expected_ref:
+                continue
+
+            matching_services.append(repo)
+
+        if not matching_services:
+            logger.warning(f"Received push event for repository '{push_info.repository}' but no matching service was found in the configuration.")
+            return
+
+        for service in matching_services:
+            logger.info(f"Enqueuing recheck for service '{service.name}' due to push event on repository '{push_info.repository}'...")
+            deploy.enqueue_recheck(service)

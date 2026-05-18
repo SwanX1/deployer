@@ -1,17 +1,49 @@
+from time import sleep
 from os import path
 from config import RepositoryConfig
-from threading import Thread
+from threading import Thread, Lock
 import tools as t
 import logging
 
 logger = logging.getLogger(__name__)
 
+SERVICE_THREADS: dict[str, Thread] = {} # Map from service name to thread object
+SERVICE_THREADS_LOCK = Lock() # Lock to protect access to SERVICE_THREADS
+
+def is_service_deploying(service_name: str) -> bool:
+    with SERVICE_THREADS_LOCK:
+        thread = SERVICE_THREADS.get(service_name)
+        if thread is not None and thread.is_alive():
+            return True
+    return False
+
+def enqueue_recheck(service: RepositoryConfig):
+    name = service.name
+
+    if is_service_deploying(name):
+        # Start a new thread that waits for the current deployment to finish, then starts a new deployment
+        def wait_and_recheck(deployment_thread: Thread):
+            logger.info(f"Waiting for current deployment of {name} to finish before starting new deployment...")
+            
+            while deployment_thread.is_alive():
+                sleep(1) # Check every second if the deployment is still running
+            recheck(service)
+
+        with SERVICE_THREADS_LOCK:
+            thread = Thread(target=wait_and_recheck, args=(SERVICE_THREADS[name],))
+            thread.start()
+            SERVICE_THREADS[name] = thread
+    else:
+        # Start a new deployment immediately
+        thread = Thread(target=recheck, args=(service,))
+        thread.start()
+        with SERVICE_THREADS_LOCK:
+            SERVICE_THREADS[name] = thread
+
 def recheck(service: RepositoryConfig):
     dir = service.directory
     name = service.name
     logging.info(f"Updating {name} from {service.url}...")
-    
-    latest_commit = None
 
     # Check if the repository already exists locally
     if not t.check_repository_exists(dir):
@@ -21,6 +53,7 @@ def recheck(service: RepositoryConfig):
             logging.error(f"Failed to clone repository {name}.")
             return
         latest_commit = t.get_current_commit(dir)
+        force = True # Force deployment for new clones
     else:
         # Check if the repository has changes (in else block to avoid unnecessary checks for new clones)
         if t.has_uncommitted_changes(dir):
@@ -52,9 +85,11 @@ def recheck(service: RepositoryConfig):
             logging.error(f"Failed to fetch latest changes for {name}.")
             return
 
-    redeploy(service, latest_commit)
+        force = False
 
-def redeploy(service: RepositoryConfig, commit_hash: str):
+    redeploy(service, latest_commit, force)
+
+def redeploy(service: RepositoryConfig, commit_hash: str, force: bool = False):
     # Assume the repository is already cloned, checked for changes,
     # fetched, and actually needs (re)deployment
 
@@ -62,7 +97,7 @@ def redeploy(service: RepositoryConfig, commit_hash: str):
     name = service.name
 
     previous_commit = t.get_current_commit(dir)
-    if previous_commit == commit_hash: # Redundant in this code
+    if previous_commit == commit_hash and not force: # Redundant in this code
         logging.info(f"{name} is already at the latest commit {commit_hash}. No need to redeploy.")
         return
 
@@ -123,8 +158,9 @@ def redeploy(service: RepositoryConfig, commit_hash: str):
             logging.error(f"Build for {name} is taking too long...")
         elif result["stage"] == "start":
             logging.error(f"Starting containers for {name} is taking too long...")
-
         return
+
+    logging.info(f"Deployment of {name} complete.")
     
     
 
