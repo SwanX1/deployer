@@ -1,0 +1,14 @@
+# Systemd service file for the deployer script
+# Save this as deployer.service and place it in /etc/systemd/
+
+[Unit]
+Description=Deployer Service
+After=network.target
+
+[Service]
+Type=exec
+Restart=on-failure
+RestartSec=5s
+ExecStart=/path/to/uv run ./src/main.py --config ./config.json
+WorkingDirectory=/home/deployer/deployer
+User=deployer
