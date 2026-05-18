@@ -28,6 +28,7 @@ class RepositoryConfig(BaseModel):
 class NotificationConfig(BaseModel):
     type: str
     url: str
+    username: str = "Deployer"
 
     @field_validator('type', mode='before')
     def validate_type(cls, v: str) -> str:

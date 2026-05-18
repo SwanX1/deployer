@@ -10,7 +10,8 @@
     "notifications": [
         {
             "type": "discord",
-            "url": "https://discord.com/api/webhooks/..."
+            "url": "https://discord.com/api/webhooks/...",
+            "username": "Deployer"
         }
     ],
     "host": "0.0.0.0",

@@ -1,3 +1,4 @@
+from notifier import log_and_notify, NotificationType
 from time import sleep
 from os import path
 from config import RepositoryConfig
@@ -48,16 +49,16 @@ def recheck(service: RepositoryConfig):
     # Check if the repository already exists locally
     if not t.check_repository_exists(dir):
         logging.info(f"Cloning repository {name}...")
-        success = t.clone_repository(service.url, dir)
-        if not success:
-            logging.error(f"Failed to clone repository {name}.")
+        result = t.clone_repository(service.url, dir)
+        if not result.success:
+            log_and_notify(NotificationType.CHECK_CANNOT_CLONE, name, result.output)
             return
         latest_commit = t.get_current_commit(dir)
         force = True # Force deployment for new clones
     else:
         # Check if the repository has changes (in else block to avoid unnecessary checks for new clones)
         if t.has_uncommitted_changes(dir):
-            logging.warning(f"Warning: Repository {name} has uncommitted changes. Please commit or stash them before deploying.")
+            log_and_notify(NotificationType.CHECK_UNCOMMITTED_CHANGES, name, None)
             return
         
 
@@ -67,10 +68,12 @@ def recheck(service: RepositoryConfig):
 
 
         # Get the latest commit hash from the remote repository
-        latest_commit = t.get_latest_remote_commit(service.url)
-        if latest_commit is None:
-            logging.error(f"Failed to get latest commit hash for {name} from remote.")
+        result = t.get_latest_remote_commit(service.url)
+        if not result.success:
+            log_and_notify(NotificationType.CHECK_LS_REMOTE_FAILED, name, result.output)
             return
+
+        latest_commit = result.output
         
         logging.info(f"Latest commit hash for {name} on remote: {latest_commit}")
 
@@ -80,9 +83,9 @@ def recheck(service: RepositoryConfig):
 
         # Fetch latest changes
         logging.info(f"Fetching latest changes for {name}...")
-        success = t.fetch_latest(dir)
-        if not success:
-            logging.error(f"Failed to fetch latest changes for {name}.")
+        result = t.fetch_latest(dir)
+        if not result.success:
+            log_and_notify(NotificationType.CHECK_FETCH_FAILED, name, result.output)
             return
 
         force = False
@@ -96,6 +99,8 @@ def redeploy(service: RepositoryConfig, commit_hash: str, force: bool = False):
     dir = service.directory
     name = service.name
 
+    log_and_notify(NotificationType.DEPLOY_STARTED, name, None)
+
     previous_commit = t.get_current_commit(dir)
     if previous_commit == commit_hash and not force: # Redundant in this code
         logging.info(f"{name} is already at the latest commit {commit_hash}. No need to redeploy.")
@@ -103,44 +108,54 @@ def redeploy(service: RepositoryConfig, commit_hash: str, force: bool = False):
 
     # Reset to latest commit
     logging.info(f"Resetting {name} to latest commit...")
-    success = t.reset_to_commit(dir, commit_hash)
+    result = t.reset_to_commit(dir, commit_hash)
 
-    if not success:
-        logging.error(f"Failed to reset {name} to commit {commit_hash}.")
+    if not result.success:
+        log_and_notify(NotificationType.DEPLOY_CANNOT_RESET, name, result.output)
         return
 
     base_dir = service.directory
 
     # Check for docker-compose.yml file
     if not path.exists(path.join(base_dir, 'docker-compose.yml')) and not path.exists(path.join(base_dir, 'docker-compose.yaml')):
-        logging.warning(f"Warning: No docker-compose.yml found in {name}. Skipping Docker deployment.")
+        log_and_notify(NotificationType.DEPLOY_NO_DOCKER_COMPOSE, name, "No docker-compose.yml or docker-compose.yaml file found in commit")
         _revert(service, previous_commit)
         return
 
     # Pull latest images
-    success = t.docker_pull_images(base_dir)
-    if not success:
-        logging.error(f"Failed to pull latest Docker images for {name}.")
+    result = t.docker_pull_images(base_dir)
+    if not result.success:
+        log_and_notify(NotificationType.DEPLOY_CANNOT_PULL, name, result.output )
         _revert(service, previous_commit)
         return
 
-    result = { "stage": "build" }
+    result = { "stage": "build", "success": False }
 
     # This can run indefinitely for all we care. (there is a hard limit of 1 hour in tools.py)
     def subprocess():
         # Build required containers
-        success = t.docker_build_images(base_dir)
+        cresult = t.docker_build_images(base_dir)
         result["stage"] = "start"
-        if not success:
-            logging.error(f"Failed to build required Docker images for {name}.")
+        if not cresult.success:
+            output = cresult.output
+            # Use only last 20 lines of output to avoid excessively long messages
+            output_lines = output.splitlines()
+            if len(output_lines) > 20:
+                output = "\n".join(output_lines[-20:])
+            log_and_notify(NotificationType.DEPLOY_CANNOT_BUILD, name, output)
             _revert(service, previous_commit)
             return
 
         # Start containers
-        success = t.docker_start_containers(base_dir)
+        cresult = t.docker_start_containers(base_dir)
         result["stage"] = "complete"
-        if not success:
-            logging.error(f"Failed to start Docker containers for {name}.")
+        if not cresult.success:
+            output = cresult.output
+            # Use only last 20 lines of output to avoid excessively long messages
+            output_lines = output.splitlines()
+            if len(output_lines) > 20:
+                output = "\n".join(output_lines[-20:])
+            log_and_notify(NotificationType.DEPLOY_CANNOT_START, name, output)
             # No point in reverting. No idea how to even begin to revert a
             # failed container start. Just log the error and return.
             # We could end up in a loop of:
@@ -148,6 +163,8 @@ def redeploy(service: RepositoryConfig, commit_hash: str, force: bool = False):
             #  - revert to previous commit
             #  - try to start containers again, fail again
             return
+
+        result["success"] = True
     
     subprocess_thread = Thread(target=subprocess)
     subprocess_thread.start()
@@ -155,12 +172,13 @@ def redeploy(service: RepositoryConfig, commit_hash: str, force: bool = False):
 
     if subprocess_thread.is_alive():
         if result["stage"] == "build":
-            logging.error(f"Build for {name} is taking too long...")
+            log_and_notify(NotificationType.DEPLOY_CANNOT_BUILD, name, "Timeout reached, too long to build")
         elif result["stage"] == "start":
-            logging.error(f"Starting containers for {name} is taking too long...")
+            log_and_notify(NotificationType.DEPLOY_CANNOT_START, name, "Timeout reached, too long to start")
         return
 
-    logging.info(f"Deployment of {name} complete.")
+    if result["success"]:
+        log_and_notify(NotificationType.DEPLOY_SUCCESS, name, f"Deployment is now using commit {commit_hash}\nPrevious commit was {previous_commit}")
     
     
 
@@ -170,8 +188,8 @@ def _revert(service: RepositoryConfig, commit_hash: str):
 
     # Reset to previous commit
     logging.info(f"Reverting {name} to previous commit...")
-    success = t.reset_to_commit(dir, commit_hash)
+    result = t.reset_to_commit(dir, commit_hash)
 
-    if not success:
+    if not result.success:
         logging.error(f"Failed to revert {name} to commit {commit_hash}.")
         return
