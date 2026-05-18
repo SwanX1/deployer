@@ -15,13 +15,13 @@ class RepositoryConfig(BaseModel):
     def resolve_directory(cls, v: str, info: ValidationInfo) -> str:
         resolved_directory = path.abspath(v)
         if resolved_directory != v:
-            logger.info(f"Resolved directory for {info.data['name']} is '{resolved_directory}' (original: '{v}')")
+            logger.debug(f"Resolved directory for {info.data['name']} is '{resolved_directory}' (original: '{v}')")
         return resolved_directory
     
     @field_validator('branch', mode='after')
     def validate_branch(cls, v: str | None, info: ValidationInfo) -> str | None:
         if v is None:
-            logger.info(f"No branch specified for {info.data['name']}, defaulting to remote HEAD")
+            logger.debug(f"No branch specified for {info.data['name']}, defaulting to remote HEAD")
         return v
 
 

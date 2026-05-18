@@ -7,5 +7,6 @@ requires-python = ">=3.13"
 dependencies = [
     "pydantic>=2.13.4",
     "quart>=0.20.0",
+    "requests>=2.34.2",
     "uvicorn>=0.47.0",
 ]
